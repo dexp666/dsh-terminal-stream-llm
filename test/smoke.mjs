@@ -56,6 +56,19 @@ for (let i = 0; i < 50 && !routes.has('/plugins/dsh-terminal-stream/events'); i 
 // The plugin's effects run synchronously at apply time.
 assert.equal(routes.has('/plugins/dsh-terminal-stream/events'), true, 'SSE route registered')
 
+// --- client bundle contract (loader factory + CJS shim) ----------------------
+{
+  const { readFileSync } = await import('node:fs')
+  const { fileURLToPath } = await import('node:url')
+  const clientJs = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  assert.ok(clientJs.startsWith('window.__ModuleLoader__.load({ id: "dsh-terminal-stream-llm", factory: (require) => {'),
+    'client.js must register the loader factory')
+  assert.ok(clientJs.includes('var module = { exports: {} }; var exports = module.exports;'),
+    'client.js factory must declare the CJS module/exports shim (exports is not defined)')
+  assert.ok(clientJs.trimEnd().endsWith('return module.exports; } });'),
+    'client.js factory must return module.exports')
+}
+
 // --- SSE bridge forwards published frames -----------------------------------
 const route = routes.get('/plugins/dsh-terminal-stream/events')
 const closeHandlers = []

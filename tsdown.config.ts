@@ -42,8 +42,13 @@ const client = defineConfig({
   platform: 'browser',
   dts: true,
   outExtensions: () => ({ js: '.js', dts: '.d.ts' }),
-  banner: 'window.__ModuleLoader__.load({ id: "dsh-terminal-stream-llm", factory: (require) => {',
-  intro: 'var module = { exports: {} }; var exports = module.exports;',
+  banner: [
+    'window.__ModuleLoader__.load({ id: "dsh-terminal-stream-llm", factory: (require) => {',
+    // The CJS shim rides in the banner: tsdown silently drops `intro`, and the
+    // DSH loader contract (see packages/client/tsdown.client.ts) requires the
+    // factory to declare `module`/`exports` itself and return `module.exports`.
+    'var module = { exports: {} }; var exports = module.exports;',
+  ].join('\n'),
   footer: 'return module.exports; } });',
   external: ['react', 'react/jsx-runtime', '@deepseek-ai/cordis'],
 })
