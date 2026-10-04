@@ -1,7 +1,7 @@
 {
   "name": "dsh-terminal-stream-llm",
-  "version": "0.1.0",
-  "description": "DSH plugin: capture terminal command output in real time, stream it to the DeepSeek API for incremental LLM analysis, and render the analysis live in the session UI.",
+  "version": "0.2.0",
+  "description": "DSH host plugin: capture terminal command output, stream it to the DeepSeek API for incremental LLM analysis; deltas are published on the cordis event bus and echoed to the host log (no UI).",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -9,10 +9,6 @@
     ".": {
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
-    },
-    "./client": {
-      "types": "./lib/client.d.ts",
-      "default": "./lib/client.js"
     },
     "./testing": {
       "types": "./lib/testing.d.ts",
@@ -34,9 +30,6 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
-    },
-    "client": {
-      "platform": "web"
     }
   },
   "dependencies": {
@@ -44,15 +37,12 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=4.0.0",
-    "@deepseek-ai/schemastery": ">=3.18.0",
-    "react": "^18.2.0"
+    "@deepseek-ai/schemastery": ">=3.18.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
     "@deepseek-ai/schemastery": "^3.18.4",
     "@types/node": "^26.6.4",
-    "@types/react": "^18.2.0",
-    "react": "^18.2.0",
     "tsdown": "^0.23.0",
     "typescript": "^5.6.0"
   }

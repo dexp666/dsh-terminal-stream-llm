@@ -18,13 +18,20 @@
 
 import OpenAI from 'openai'
 import type { Context } from '@deepseek-ai/cordis'
-import type { CaptureChunk } from '../types.js'
+import type { AnalysisDeltaPayload, CaptureChunk, ReasoningDeltaPayload, StatusPayload } from '../types.js'
 import type { TerminalCapture } from './terminal-capture.js'
 
 /** Transport-level retry backoff base, in milliseconds. */
 const RETRY_BACKOFF_BASE_MS = 500
 /** Transport-level retry backoff cap, in milliseconds. */
 const RETRY_BACKOFF_CAP_MS = 8_000
+
+/** Events the streaming stage publishes downstream (bus + log). */
+export interface StreamListener {
+  analysis(payload: AnalysisDeltaPayload): void
+  reasoning(payload: ReasoningDeltaPayload): void
+  status(payload: StatusPayload): void
+}
 
 export interface StreamOptions {
   ctx: Context
@@ -35,8 +42,8 @@ export interface StreamOptions {
   model: string
   instructions: string
   maxRetries: number
-  /** Publish an SSE-bridge event (event name, JSON-safe payload). */
-  publish(event: string, payload: unknown): void
+  /** Receive every published event. */
+  listener: StreamListener
 }
 
 export interface DeepSeekStreamHandle {
@@ -44,7 +51,7 @@ export interface DeepSeekStreamHandle {
 }
 
 export function startDeepSeekStream(options: StreamOptions): DeepSeekStreamHandle {
-  const { ctx, capture, signal, apiKey, baseURL, model, instructions, maxRetries, publish } = options
+  const { ctx, capture, signal, apiKey, baseURL, model, instructions, maxRetries, listener } = options
 
   // maxRetries: 0 — retry policy is owned by this module, not the SDK.
   const client = new OpenAI({ apiKey, baseURL, maxRetries: 0 })
@@ -61,21 +68,21 @@ export function startDeepSeekStream(options: StreamOptions): DeepSeekStreamHandl
   function publishStatus(): void {
     const payload = { state, receivedBytes, ttftMs, model, lastError }
     ctx.emit('terminal-stream/status', payload)
-    publish('terminal-stream/status', payload)
+    listener.status(payload)
   }
 
   function publishAnalysis(delta: string): void {
     analysisSeq += 1
     const payload = { runId, seq: analysisSeq, delta }
     ctx.emit('terminal-stream/analysis-delta', payload)
-    publish('terminal-stream/analysis-delta', payload)
+    listener.analysis(payload)
   }
 
   function publishReasoning(delta: string): void {
     reasoningSeq += 1
     const payload = { runId, seq: reasoningSeq, delta }
     ctx.emit('terminal-stream/reasoning-delta', payload)
-    publish('terminal-stream/reasoning-delta', payload)
+    listener.reasoning(payload)
   }
 
   /** Derive a per-call AbortController from the plugin lifecycle signal. */

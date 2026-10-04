@@ -2,6 +2,7 @@ import { defineConfig } from 'tsdown'
 
 /**
  * Host bundle — plain Node ESM, loaded by the DSH Host Loader as `lib/index.js`.
+ * This plugin has no client half; there is nothing to serve to the browser.
  */
 const host = defineConfig({
   entry: ['src/index.ts'],
@@ -27,30 +28,4 @@ const testing = defineConfig({
   external: ['@deepseek-ai/cordis'],
 })
 
-/**
- * Client bundle — must match the DSH client module format produced by the
- * in-repo `clientBundle` preset (packages/client/tsdown.client.ts): the file
- * registers a `{ id, factory }` with `window.__ModuleLoader__`, the factory
- * receives the loader's injected `require`, and exports leave via
- * `module.exports`. Externals (react, react/jsx-runtime) are resolved from the
- * shell's platform module table at runtime.
- */
-const client = defineConfig({
-  entry: { client: 'src/client/index.tsx' },
-  outDir: 'lib',
-  format: 'cjs',
-  platform: 'browser',
-  dts: true,
-  outExtensions: () => ({ js: '.js', dts: '.d.ts' }),
-  banner: [
-    'window.__ModuleLoader__.load({ id: "dsh-terminal-stream-llm", factory: (require) => {',
-    // The CJS shim rides in the banner: tsdown silently drops `intro`, and the
-    // DSH loader contract (see packages/client/tsdown.client.ts) requires the
-    // factory to declare `module`/`exports` itself and return `module.exports`.
-    'var module = { exports: {} }; var exports = module.exports;',
-  ].join('\n'),
-  footer: 'return module.exports; } });',
-  external: ['react', 'react/jsx-runtime', '@deepseek-ai/cordis'],
-})
-
-export default [host, testing, client]
+export default [host, testing]

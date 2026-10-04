@@ -2,12 +2,11 @@
  * Standalone smoke test for the host half of dsh-terminal-stream-llm.
  *
  * Runs the real plugin on a real cordis root context with a stub `tools`
- * service and a stub webServer, then:
+ * service, then:
  *  1. simulates a `tools/result` event (terminal_send output) and asserts the
  *     capture → aggregation → queue pipeline emits `terminal-stream/*` events;
- *  2. asserts the SSE route was registered and forwards frames;
- *  3. asserts the bounded queue applies backpressure without dropping data;
- *  4. unloads the plugin and asserts every disposer ran (no leaked effects).
+ *  2. asserts the bounded queue applies backpressure without dropping data;
+ *  3. unloads the plugin and asserts the effects unrolled cleanly.
  *
  * Usage: node test/smoke.mjs   (after `npm run build`)
  */
@@ -26,19 +25,13 @@ const config = Config({
   maxQueueSize: 3,
   maxOutputBytes: 4096,
   maxRetries: 1,
+  logAnalysis: false,
 })
 
 const ctx = new Context()
 
 // Stub services the host half touches.
-const routes = new Map()
 ctx.provide('tools', {})
-ctx.provide('webServer', {
-  register(route) {
-    routes.set(route.path, route)
-    return () => routes.delete(route.path)
-  },
-})
 
 // Capture emitted cordis events.
 const emitted = []
@@ -49,43 +42,7 @@ ctx.on('terminal-stream/status', (payload) => emitted.push({ kind: 'status', pay
 // disposable plugin fiber rather than the root context.
 const plugin = await import('../lib/index.js')
 const fiber = ctx.plugin(plugin, config)
-for (let i = 0; i < 50 && !routes.has('/plugins/dsh-terminal-stream/events'); i += 1) {
-  await new Promise((resolve) => setTimeout(resolve, 10))
-}
-
-// The plugin's effects run synchronously at apply time.
-assert.equal(routes.has('/plugins/dsh-terminal-stream/events'), true, 'SSE route registered')
-
-// --- client bundle contract (loader factory + CJS shim) ----------------------
-{
-  const { readFileSync } = await import('node:fs')
-  const { fileURLToPath } = await import('node:url')
-  const clientJs = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
-  assert.ok(clientJs.startsWith('window.__ModuleLoader__.load({ id: "dsh-terminal-stream-llm", factory: (require) => {'),
-    'client.js must register the loader factory')
-  assert.ok(clientJs.includes('var module = { exports: {} }; var exports = module.exports;'),
-    'client.js factory must declare the CJS module/exports shim (exports is not defined)')
-  assert.ok(clientJs.trimEnd().endsWith('return module.exports; } });'),
-    'client.js factory must return module.exports')
-}
-
-// --- SSE bridge forwards published frames -----------------------------------
-const route = routes.get('/plugins/dsh-terminal-stream/events')
-const closeHandlers = []
-const res = {
-  headers: {},
-  writeHead(code, headers) { this.headers = { code, ...headers } },
-  write(frame) { this.frames.push(frame) },
-  frames: [],
-  on(event, handler) { closeHandlers.push(handler) },
-}
-const req = { on(event, handler) { closeHandlers.push(handler) } }
-route.handler(req, res)
-assert.match(res.frames[0], /terminal-stream\/hello/)
-// Simulate the browser closing the SSE stream (clears the heartbeat timer).
-function closeSubscriber() {
-  while (closeHandlers.length > 0) closeHandlers.pop()()
-}
+await new Promise((resolve) => setTimeout(resolve, 50))
 
 // --- capture → aggregation → queue → events ---------------------------------
 ctx.emit('tools/result', { name: 'terminal_send', arguments: { text: 'ping -c 10 localhost' } }, {
@@ -100,9 +57,6 @@ assert.ok(chunks.length >= 1, `expected captured chunks, got ${emitted.length} e
 assert.match(chunks[0].payload.text, /64 bytes from localhost/)
 assert.equal(chunks[0].payload.command, 'ping -c 10 localhost')
 
-// SSE subscriber saw the forwarded frames.
-assert.ok(res.frames.some((frame) => frame.includes('terminal-stream/chunk-captured')), 'SSE forwarded chunk')
-
 // --- watcher filter ----------------------------------------------------------
 emitted.length = 0
 ctx.emit('tools/result', { name: 'unrelated_tool', arguments: {} }, { content: [{ type: 'text', text: 'noise' }] })
@@ -114,8 +68,8 @@ assert.equal(emitted.filter((entry) => entry.kind === 'chunk').length, 0, 'non-w
   const { BoundedQueue } = await import('../lib/testing.js')
   const queue = new BoundedQueue(2)
   const signal = new AbortController()
-  const pushes = []
   // Enqueue 6 items into a queue of capacity 2 while nobody consumes.
+  const pushes = []
   for (let i = 0; i < 6; i += 1) pushes.push(queue.push({ i }, signal.signal))
   await new Promise((resolve) => setTimeout(resolve, 120))
   assert.ok(queue.size <= 2, 'queue stays bounded')
@@ -127,8 +81,6 @@ assert.equal(emitted.filter((entry) => entry.kind === 'chunk').length, 0, 'non-w
 }
 
 // --- unload: effects unroll --------------------------------------------------
-closeSubscriber()
 await fiber.dispose()
-assert.equal(routes.has('/plugins/dsh-terminal-stream/events'), false, 'SSE route disposed on unload')
 
-console.log('smoke test passed: capture, aggregation, backpressure, SSE bridge, unload cleanup all OK')
+console.log('smoke test passed: capture, aggregation, backpressure, unload cleanup all OK')

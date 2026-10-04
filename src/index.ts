@@ -1,22 +1,23 @@
 /**
- * dsh-terminal-stream-llm — plugin entry (host half).
+ * dsh-terminal-stream-llm — plugin entry (host half, no UI).
  *
  * Pipeline: tools/result capture → line/200ms aggregation → bounded queue
  * (backpressure, no data loss) → DeepSeek streaming Responses API →
- * `ctx.emit` + SSE bridge → browser panel.
+ * `ctx.emit` + host log.
  *
- * Lifecycle: every side effect is registered through `ctx.effect()`, so the
- * Fiber unrolls it (listener removal, route disposal, in-flight request
- * aborts, queue shutdown) automatically on plugin unload or hot reload.
- * Only the plugin identity (`name`), the hard-dependency list (`inject`) and
- * the settings schema (`Config`) are exported besides `apply` — that is the
- * full DSH plugin surface; nothing else leaks from this module.
+ * There is deliberately no client half: analysis deltas are published on the
+ * typed cordis event bus (other host-side plugins may subscribe) and echoed to
+ * the host log (`logAnalysis` config, default on). All side effects are
+ * registered through `ctx.effect()`, so the Fiber unrolls them (listener
+ * removal, in-flight request aborts, queue shutdown) automatically on plugin
+ * unload or hot reload. Only the plugin identity (`name`), the
+ * hard-dependency list (`inject`) and the settings schema (`Config`) are
+ * exported besides `apply` — that is the full DSH plugin surface.
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { startDeepSeekStream } from './host/deepseek-stream.js'
-import { mountSseBridge } from './host/sse-bridge.js'
 import { BoundedQueue, commandOf, contentText, startTerminalCapture } from './host/terminal-capture.js'
 import type { CaptureChunk } from './types.js'
 
@@ -45,6 +46,8 @@ export interface Config {
   maxOutputBytes: number
   /** Exponential-backoff retries for 429/5xx streaming failures. */
   maxRetries: number
+  /** Echo analysis deltas and status changes to the host log. */
+  logAnalysis: boolean
 }
 
 export const Config: z<Config> = z.object({
@@ -58,6 +61,7 @@ export const Config: z<Config> = z.object({
   maxQueueSize: z.number().default(10).min(1),
   maxOutputBytes: z.number().default(16_384).min(1024),
   maxRetries: z.number().default(3).min(0).max(10),
+  logAnalysis: z.boolean().default(true),
 })
 
 const DEFAULT_ABORT_REASON = new Error('dsh-terminal-stream-llm unloaded')
@@ -65,7 +69,6 @@ const DEFAULT_ABORT_REASON = new Error('dsh-terminal-stream-llm unloaded')
 export function apply(ctx: Context, config: Config): void {
   const queue = new BoundedQueue<CaptureChunk>(config.maxQueueSize)
   const controller = new AbortController()
-  const bridge = mountSseBridge(ctx)
 
   // The capture object is plain state (no side effects yet); the effects below
   // own its listener subscription and its teardown.
@@ -90,20 +93,15 @@ export function apply(ctx: Context, config: Config): void {
         ctx.logger?.warn?.('terminal-stream-llm: capture observer failed:', error)
       }
     })
-    // The capture pipeline emits on the cordis bus; the browser half listens
-    // through the SSE bridge, so forward its events there as well.
-    const offForward = ctx.on('terminal-stream/chunk-captured', (payload) => {
-      bridge.publish('terminal-stream/chunk-captured', payload)
-    })
     return () => {
       offResult()
-      offForward()
       capture.stop()
     }
   }, 'terminal-stream-llm: terminal capture')
 
-  // Streaming: consume the capture generator and stream analysis deltas.
-  // Aborting the lifecycle controller ends every in-flight API request.
+  // Streaming: consume the capture generator, stream analysis deltas onto the
+  // event bus and (optionally) into the host log. Aborting the lifecycle
+  // controller ends every in-flight API request on unload.
   ctx.effect(() => {
     const streaming = startDeepSeekStream({
       ctx,
@@ -114,7 +112,22 @@ export function apply(ctx: Context, config: Config): void {
       model: config.model,
       instructions: config.instructions,
       maxRetries: config.maxRetries,
-      publish: bridge.publish,
+      listener: {
+        analysis: (payload) => {
+          ctx.emit('terminal-stream/analysis-delta', payload)
+          if (config.logAnalysis) ctx.logger?.info?.(`[分析] ${payload.delta}`)
+        },
+        reasoning: (payload) => {
+          ctx.emit('terminal-stream/reasoning-delta', payload)
+          if (config.logAnalysis) ctx.logger?.info?.(`[思考] ${payload.delta}`)
+        },
+        status: (payload) => {
+          ctx.emit('terminal-stream/status', payload)
+          if (config.logAnalysis && payload.state === 'error') {
+            ctx.logger?.warn?.(`[状态] 分析出错: ${payload.lastError}`)
+          }
+        },
+      },
     })
     return () => {
       controller.abort(DEFAULT_ABORT_REASON)

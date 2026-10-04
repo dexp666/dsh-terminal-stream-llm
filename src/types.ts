@@ -2,10 +2,8 @@
  * Shared wire types for dsh-terminal-stream-llm.
  *
  * The host side emits these payloads on the cordis event bus (typed via the
- * `Events` declaration merge below) and forwards the same payloads verbatim to
- * the browser half through the plugin's SSE bridge
- * (`/plugins/dsh-terminal-stream/events`), because forwarded-host-event
- * allowlisting is application-owned and not extensible by external plugins.
+ * `Events` declaration merge below) and, when `logAnalysis` is enabled,
+ * echoes them to the host log.
  */
 
 /** One terminal-output chunk accepted by the capture pipeline. */
@@ -46,17 +44,6 @@ export interface StatusPayload {
   readonly model: string
   readonly lastError: string | undefined
 }
-
-/** Event names forwarded over the SSE bridge, in wire order. */
-export const SSE_EVENT_NAMES = [
-  'terminal-stream/status',
-  'terminal-stream/chunk-captured',
-  'terminal-stream/analysis-delta',
-  'terminal-stream/reasoning-delta',
-] as const
-
-/** Absolute pathname of the SSE bridge route (must match the client half). */
-export const SSE_PATH = '/plugins/dsh-terminal-stream/events'
 
 declare module '@deepseek-ai/cordis' {
   interface Events {
