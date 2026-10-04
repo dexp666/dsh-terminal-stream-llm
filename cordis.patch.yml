@@ -1,0 +1,5 @@
+# dsh-terminal-stream-llm — composition patch.
+# Inserts the plugin into every profile that installs this package as a bundle.
+- insert:
+    - id: terminal-stream-llm
+      name: dsh-terminal-stream-llm
